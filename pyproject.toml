@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "dat-shape"
+version = "0.1.0"
+description = ""
+authors = ["Lars Viklund <zao@zao.se>"]
+readme = "README.md"
+packages = [{include = "dat_shape"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pyooz = "^0.0.8"
+ndjson = "^0.3.1"
+zstandard = "^0.20.0"
+requests = "^2.28.2"
+atomicwrites = "^1.4.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+dat_shape = 'dat_shape.console:run'
