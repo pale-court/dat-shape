@@ -1,7 +1,8 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import PurePosixPath
-from typing import Dict
+from typing import Dict, Optional
 from zstandard import ZstdCompressor, ZstdDecompressor
 
 from . import poe_util
@@ -143,3 +144,34 @@ def generate_path_hash_table(index: BundleIndex):
                 ret[hash] = s
 
     return ret
+
+def enumerate_path_table(index: BundleIndex, filter: Optional[Callable[[str], bool]] = None):
+    path_data = CompressedBundle(BytesIO(index.path_comp)).decompress_all()
+    path_view = memoryview(path_data)
+    for rep in index.path_reps:
+        slice = path_view[rep.offset:rep.offset+rep.size]
+        base_phase = False
+        bases = []
+        while len(slice):
+            cmd, = struct.unpack('<I', slice[:4])
+            slice = slice[4:]
+
+            # toggle phase on zero command word
+            if cmd == 0:
+                base_phase = not base_phase
+                if base_phase:
+                    bases.clear()
+                continue
+
+            # otherwise build a base or emit a string
+            s, slice = _cut_ntmbs(slice)
+            if cmd <= len(bases):
+                s = bases[cmd-1] + s.decode('UTF-8')
+            else:
+                s = s.decode('UTF-8')
+
+            if base_phase:
+                bases.append(s)
+            elif not filter or filter(s):
+                hash = poe_util.hash_file_path(s)
+                yield (hash, s)

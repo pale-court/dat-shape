@@ -23,7 +23,13 @@ output_dir = Path('/home/zao/dat-meta')
 shape_path = proj_dir / 'shape.json'
 global_path = output_dir / 'global.json'
 
+@dataclass
+class Options:
+    push_to_git: bool
+    profile_run: bool
+
 def run():
+    opts = Options(push_to_git=False, profile_run=False)
     shape = json.loads(shape_path.read_text())
     old_global = None
     if global_path.exists():
@@ -54,8 +60,10 @@ def run():
         }
 
     test_build_id = '5540437'
+    if opts.profile_run and len(builds_to_process) == 0:
+        builds_to_process.append(test_build_id)
+
     for build_id in builds_to_process:
-    # for build_id in [test_build_id]:
         build = builds[build_id]
         print(build)
         manifest_id = build['manifests']['238961']
@@ -74,16 +82,20 @@ def run():
             with zstd.ZstdDecompressor().stream_reader(index_payload, read_across_frames=True) as dfh:
                 index_payload = dfh.read()
         index = bundles.BundleIndex(index_payload)
-        path_table = bundles.generate_path_hash_table(index)
+        index_files_by_phash = {rec.path_hash: rec for rec in index.files}
         dat64_by_bundle = {}
-        for phash, path in path_table.items():
-            if (pp := PurePosixPath(path)).suffix == '.dat64' and len(pp.parents) == 2:
-                rec = [rec for rec in index.files if rec.path_hash == phash][0]
-                entry = {"path": pp, "file_record": rec}
-                if (bid := rec.bundle_index) in dat64_by_bundle:
-                    dat64_by_bundle[bid].append(entry)
-                else:
-                    dat64_by_bundle[bid] = [entry]
+        def dat64_filter(path : str):
+            return path.endswith('.dat64') and path.count('/') == 1
+            pp = PurePosixPath(path)
+            return pp.suffix == ".dat64" and len(pp.parents) == 2
+
+        for phash, path in bundles.enumerate_path_table(index, dat64_filter):
+            rec = index_files_by_phash[phash]
+            entry = {"path": PurePosixPath(path), "file_record": rec}
+            if (bid := rec.bundle_index) in dat64_by_bundle:
+                dat64_by_bundle[bid].append(entry)
+            else:
+                dat64_by_bundle[bid] = [entry]
 
         build_output = {
             "files": {}
@@ -127,10 +139,11 @@ def run():
         global_path.unlink(missing_ok=True)
     global_path.chmod(0o644)
 
-    os.chdir(output_dir)
-    os.system('git add *.json')
-    os.system('git commit -m "autocommit"')
-    os.system('git push -u origin main')
+    if opts.push_to_git:
+        os.chdir(output_dir)
+        os.system('git add *.json')
+        os.system('git commit -m "autocommit"')
+        os.system('git push -u origin main')
 
 
 class DatInfo:
