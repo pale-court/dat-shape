@@ -17,8 +17,8 @@ poe_data_url = f'{poe_root_url}/poe-data'
 poe_index_url = f'{poe_root_url}/poe-index'
 poe_meta_url = f'{poe_root_url}/poe-meta'
 
-proj_dir = Path('/home/zao/code/dat-shape')
-output_dir = Path('/home/zao/dat-meta')
+proj_dir = Path('/home/inya/code/dat-shape')
+output_dir = Path('/mnt/inya/dat-meta')
 
 shape_path = proj_dir / 'shape.json'
 global_path = output_dir / 'global.json'
@@ -101,6 +101,9 @@ def run():
             "files": {}
         }
 
+        build_output_path = output_dir / 'builds'
+        build_output_path.mkdir(parents=True, exist_ok=True)
+
         # iterate for each bundle
         for bid in dat64_by_bundle:
             bid_files = dat64_by_bundle[bid]
@@ -128,7 +131,7 @@ def run():
                 # print(f'{str(file["path"])}: {info!s}')
                 build_output['files'][str(file['path'])] = info.as_dict()
 
-            output_path = output_dir / f'build-{build_id}.json'
+            output_path = build_output_path / f'build-{build_id}.json'
             with atomic_write(output_path) as fh:
                 json.dump(build_output, fh, sort_keys=True, indent=2)
                 output_path.unlink(missing_ok=True)
@@ -141,7 +144,7 @@ def run():
 
     if opts.push_to_git:
         os.chdir(output_dir)
-        os.system('git add *.json')
+        os.system('git add -A')
         os.system('git commit -m "autocommit"')
         os.system('git push -u origin main')
 
