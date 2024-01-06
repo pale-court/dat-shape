@@ -30,9 +30,12 @@ class Options:
 def run():
     opts = Options(push_to_git=False, profile_run=False)
     shape = json.loads(shape_path.read_text())
-    old_global = None
+
+    global_meta = {
+        'builds': {},
+    }
     if global_path.exists():
-        old_global = json.loads(global_path.read_text())
+        global_meta = json.loads(global_path.read_text())
 
     public_url = f'{poe_meta_url}builds/public'
     r = requests.get(public_url)
@@ -42,16 +45,17 @@ def run():
 
     builds = json.loads(r.text)
 
-    global_meta = {
-        'builds': {},
-    }
     builds_to_process = []
     for build_key in sorted(builds, key=lambda x: int(x)):
-        if old_global:
-            if build_key not in old_global['builds'] or old_global['builds'][build_key]['shape_revision'] < shape['revision']:
-                builds_to_process.append(build_key)
-
         b = builds[build_key]
+        if (
+            build_key not in global_meta['builds']
+            or (last := global_meta['builds'][build_key])['shape_revision'] < shape['revision']
+            or last.get('game_version') != b.get('version')
+            ):
+            print(last, b)
+            builds_to_process.append(build_key)
+
         global_meta['builds'][build_key] = {
             'shape_revision': shape['revision'],
             'time_updated': b['time_updated'],
