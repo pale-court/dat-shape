@@ -13,9 +13,8 @@ import sys
 import zstandard as zstd
 
 poe_root_url = 'http://10.0.5.106'
-poe_data_url = f'{poe_root_url}/poe-data'
-poe_index_url = f'{poe_root_url}/poe-index'
-poe_meta_url = f'{poe_root_url}/poe-meta'
+poe_data_url = f'{poe_root_url}/poe-data/'
+poe_meta_url = f'{poe_root_url}/poe-meta/'
 
 proj_dir = Path('/home/inya/code/dat-shape')
 output_dir = Path('/mnt/inya/dat-meta')
@@ -35,7 +34,7 @@ def run():
     if global_path.exists():
         old_global = json.loads(global_path.read_text())
 
-    public_url = f'{poe_meta_url}/builds/public'
+    public_url = f'{poe_meta_url}builds/public'
     r = requests.get(public_url)
     if r.status_code != 200:
         print(f'could not fetch public builds: {r.status_code}', file=sys.stderr)
@@ -64,38 +63,34 @@ def run():
         builds_to_process.append(test_build_id)
 
     for build_id in builds_to_process:
+        if int(build_id) < 1465491:
+            # builds older than this do not have DAT64 files
+            continue
+
+        has_bundles = int(build_id) >= 5528345
+
         build = builds[build_id]
         print(build)
-        manifest_id = build['manifests']['238961']
-        loose_url = f'{poe_index_url}/238961/{manifest_id}-loose.ndjson.zst'
-        r = requests.get(loose_url)
-        if r.status_code == 200:
-            mf = manifests.parse(r.content)
+        manifest_id = build['manifests']['238961']['gid']
 
-        idxbin_entry = mf.by_path['Bundles2/_.index.bin']
-        hash = idxbin_entry['sha256']
-        comp = idxbin_entry['comp']
-        idxbin_url = f'{poe_data_url}/{hash[:2]}/{hash}.bin{".zst" if comp else ""}'
-        r = requests.get(idxbin_url)
-        index_payload = r.content
-        if comp:
-            with zstd.ZstdDecompressor().stream_reader(index_payload, read_across_frames=True) as dfh:
-                index_payload = dfh.read()
-        index = bundles.BundleIndex(index_payload)
-        index_files_by_phash = {rec.path_hash: rec for rec in index.files}
+        mf = None
+        for mf_url in [f'{poe_data_url}idxz/238961/{manifest_id}/bundled', f'{poe_data_url}idxz/238961/{manifest_id}/loose']:
+            r = requests.get(mf_url)
+            if r.status_code == 200:
+                mf = manifests.parse(r.content)
+                break
+
+        if not mf:
+            print(f'While processing {manifest_id}: HTTP status {r.status_code}')
+            continue
+
         dat64_by_bundle = {}
-        def dat64_filter(path : str):
+        def dat64_filter(path: str):
             return path.endswith('.dat64') and path.count('/') == 1
-            pp = PurePosixPath(path)
-            return pp.suffix == ".dat64" and len(pp.parents) == 2
 
-        for phash, path in bundles.enumerate_path_table(index, dat64_filter):
-            rec = index_files_by_phash[phash]
-            entry = {"path": PurePosixPath(path), "file_record": rec}
-            if (bid := rec.bundle_index) in dat64_by_bundle:
-                dat64_by_bundle[bid].append(entry)
-            else:
-                dat64_by_bundle[bid] = [entry]
+        dat64_recs = {path: mf.by_path[path] for path in mf.by_path if dat64_filter(path)}
+        if len(dat64_recs) == 0:
+            continue
 
         build_output = {
             "files": {}
@@ -104,38 +99,19 @@ def run():
         build_output_path = output_dir / 'builds'
         build_output_path.mkdir(parents=True, exist_ok=True)
 
-        # iterate for each bundle
-        for bid in dat64_by_bundle:
-            bid_files = dat64_by_bundle[bid]
-            bundle_rec = index.bundles[bid]
-            bundle_mf_entry = mf.by_path[str(bundle_rec.bin_path())]
-            bhash = bundle_mf_entry['sha256']
-            bcomp = bundle_mf_entry['comp']
-            bundle_url = f'{poe_data_url}/{bhash[:2]}/{bhash}.bin{".zst" if bcomp else ""}'
-            r = requests.get(bundle_url)
-            index_payload = r.content
-            if bcomp:
-                with zstd.ZstdDecompressor().stream_reader(index_payload, read_across_frames=True) as dfh:
-                    index_payload = dfh.read()
-            bundle = bundles.CompressedBundle(BytesIO(index_payload))
-            bundle_data = bundle.decompress_all()
-            
-            # slice out each file
-            for file in bid_files:
-                frec = file['file_record']
-                file_end = frec.file_offset + frec.file_size
-                fdata = bundle_data[frec.file_offset:file_end]
-                
-                # process and shape it
-                info = DatInfo(fdata, file['path'].stem)
-                # print(f'{str(file["path"])}: {info!s}')
-                build_output['files'][str(file['path'])] = info.as_dict()
+        for path, rec in dat64_recs.items():
+            path = PurePosixPath(path)
+            file_url =  f"{poe_data_url}cad/{rec['sha256']}"
+            r = requests.get(file_url)
+            fdata = r.content
+            info = DatInfo(fdata, path.stem)
+            build_output['files'][str(path)] = info.as_dict()
 
-            output_path = build_output_path / f'build-{build_id}.json'
-            with atomic_write(output_path) as fh:
-                json.dump(build_output, fh, sort_keys=True, indent=2)
-                output_path.unlink(missing_ok=True)
-            output_path.chmod(0o644)
+        output_path = build_output_path / f'build-{build_id}.json'
+        with atomic_write(output_path) as fh:
+            json.dump(build_output, fh, sort_keys=True, indent=2)
+            output_path.unlink(missing_ok=True)
+        output_path.chmod(0o644)
 
     with atomic_write(global_path) as fh:
         json.dump(global_meta, fh, sort_keys=True, indent=2)
